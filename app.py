@@ -36,6 +36,33 @@ def to_num(s: pd.Series) -> pd.Series:
 def fmt_dt(ts) -> str:
     return pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M")
 
+# ---------- Kolonnenavnhjelper ----------
+def find_column(df: pd.DataFrame, base_name: str) -> str:
+    """
+    Finn kolonnenavn som matcher base_name, også med ekstra tekst i parentes.
+    F.eks. "Dato" matcher både "Dato" og "Dato (dd.mm.åååå  tt:mm)"
+    "Krav (l/s)" matcher "Krav til slipp av minstevannføring (l/s)"
+    """
+    # Først prøv eksakt match
+    if base_name in df.columns:
+        return base_name
+    
+    # Deretter prøv å finne kolonner som starter med base_name
+    for col in df.columns:
+        if col.startswith(base_name):
+            return col
+    
+    # For "Krav" - sjekk om kolonnen inneholder "krav" (case-insensitive)
+    base_lower = base_name.lower()
+    for col in df.columns:
+        col_lower = col.lower()
+        # Sjekk om kolonnen inneholder nøkkelordet
+        if base_lower.split()[0] in col_lower:  # F.eks. "Krav" i "Krav til slipp..."
+            return col
+    
+    # Ikke funnet
+    return None
+
 # ---------- Bruddlogikk ----------
 def build_segments(df_raw: pd.DataFrame, eff_min_mw: float):
     required = [COL_DATO, COL_MVF, COL_KRAV]
@@ -370,11 +397,26 @@ def main():
         
         eff_min_mw = st.number_input("Effekt-terskel (MW)", value=DEFAULT_EFF_MIN_MW, step=0.01, format="%.2f")
         gap_factor = st.number_input("Gap-faktor (for hull-deteksjon)", value=DEFAULT_GAP_FACTOR, step=0.1)
+        
+        st.markdown("---")
+        st.subheader("📊 Filformat")
+        header_row_manual = st.number_input(
+            "Hvilken rad inneholder kolonnenavn?", 
+            min_value=0, 
+            max_value=50, 
+            value=0,
+            help="0 = Auto (prøver rad 1, deretter rad 13). Hvis kolonnenavn er på en annen rad, skriv radnummeret her (f.eks. 13)."
+        )
 
     if uploaded_file:
         try:
             # Bruk pd.ExcelFile for å lese arknavn først
-            xls = pd.ExcelFile(uploaded_file, engine="openpyxl")
+            try:
+                xls = pd.ExcelFile(uploaded_file, engine="openpyxl")
+            except Exception as e:
+                st.error(f"Kunne ikke lese Excel-filen. Sjekk at filen er i riktig format (.xlsx). Feil: {str(e)}")
+                return
+            
             sheet_names = xls.sheet_names
             
             # Prøv å velge "data" som default hvis det finnes
@@ -384,13 +426,156 @@ def main():
             
             selected_sheet = st.sidebar.selectbox("Velg ark", sheet_names, index=default_index)
             
-            df_raw = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine="openpyxl")
-            
-            # Valider kolonner
-            if COL_DATO not in df_raw.columns:
-                st.error(f"Mangler kolonne: '{COL_DATO}' i arket '{selected_sheet}'.")
-                st.write("Fant følgende kolonner:", list(df_raw.columns))
+            try:
+                df_raw = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine="openpyxl")
+            except Exception as e:
+                st.error(f"Kunne ikke lese arket '{selected_sheet}'. Feil: {str(e)}")
                 return
+            
+            # Auto-detect or use manual header row
+            if header_row_manual > 0:
+                # Manual override - bruker angitt rad (konverter fra 1-indeksert til 0-indeksert)
+                header_row = header_row_manual - 1
+                st.info(f"📍 Bruker rad {header_row_manual} som kolonnenavn.")
+                df_raw = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine="openpyxl", header=header_row)
+            else:
+                # Smart auto-detect: Try row 1 first, then row 13
+                # Read with row 1 as header first
+                df_test = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine="openpyxl", header=0)
+                
+                # Check if we can find the required columns in row 1
+                test_dato = find_column(df_test, COL_DATO)
+                test_mvf = find_column(df_test, COL_MVF)
+                test_krav = find_column(df_test, COL_KRAV)
+                
+                if test_dato and test_mvf and test_krav:
+                    # Row 1 has the columns - use it
+                    header_row = 0
+                    df_raw = df_test
+                    st.info(f"✅ Fant kolonnenavn på rad 1.")
+                else:
+                    # Row 1 doesn't have columns - try row 13 (standard MVF template)
+                    header_row = 12  # Row 13 in Excel (1-indexed)
+                    df_raw = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine="openpyxl", header=header_row)
+                    st.info(f"📋 Bruker rad 13 (standard MVF-mal format).")
+            
+            # Finn kolonner med fleksibel matching
+            col_dato = find_column(df_raw, COL_DATO)
+            col_mvf = find_column(df_raw, COL_MVF)
+            col_krav = find_column(df_raw, COL_KRAV)
+            col_over = find_column(df_raw, COL_OVER)
+            col_eff = find_column(df_raw, COL_EFF)
+            
+            # Sjekk om vi fant alle nødvendige kolonner
+            missing_required = []
+            if col_dato is None:
+                missing_required.append(COL_DATO)
+            if col_mvf is None:
+                missing_required.append(COL_MVF)
+            if col_krav is None:
+                missing_required.append(COL_KRAV)
+            
+            # Vis kolonner for debugging - KUN hvis det er problemer
+            if missing_required:
+                with st.expander("📋 Kolonner i filen (klikk for å se)", expanded=True):
+                    st.write("Fant følgende kolonner:")
+                    st.write(list(df_raw.columns))
+                    
+                    # Vis hvilke kolonner som ble matchet
+                    st.write("")
+                    st.write("**Matchede kolonner:**")
+                    found_cols = []
+                    if col_dato:
+                        found_cols.append(f"✅ Dato: '{col_dato}'")
+                    else:
+                        found_cols.append(f"❌ Dato: ikke funnet")
+                    if col_mvf:
+                        found_cols.append(f"✅ Minstevannføring: '{col_mvf}'")
+                    else:
+                        found_cols.append(f"❌ Minstevannføring: ikke funnet")
+                    if col_krav:
+                        found_cols.append(f"✅ Krav: '{col_krav}'")
+                    else:
+                        found_cols.append(f"❌ Krav: ikke funnet")
+                    if col_over:
+                        found_cols.append(f"✅ Overløp: '{col_over}'")
+                    if col_eff:
+                        found_cols.append(f"✅ Effekt: '{col_eff}'")
+                    
+                    for msg in found_cols:
+                        st.write(f"  {msg}")
+            
+            # Valider at nødvendige kolonner finnes
+            if col_dato is None:
+                st.error(f"❌ Finner ikke kolonne: '{COL_DATO}' i arket '{selected_sheet}'.")
+                st.write("**💡 Mulige løsninger:**")
+                st.write(f"1. Sjekk at kolonnenavn er riktig stavet i Excel-filen")
+                st.write(f"2. Hvis kolonnenavn er på en annen rad enn {header_row + 1}, juster **'Hvilken rad inneholder kolonnenavn?'** i sidebaren")
+                st.write(f"3. Kolonnen kan også hete 'Dato (dd.mm.åååå tt:mm)' eller lignende")
+                return
+            
+            if col_mvf is None:
+                st.error(f"❌ Finner ikke kolonne: '{COL_MVF}' i arket '{selected_sheet}'.")
+                st.write("**💡 Mulige løsninger:**")
+                st.write(f"1. Sjekk at kolonnenavn er riktig stavet i Excel-filen")
+                st.write(f"2. Hvis kolonnenavn er på en annen rad enn {header_row + 1}, juster **'Hvilken rad inneholder kolonnenavn?'** i sidebaren")
+                return
+                
+            if col_krav is None:
+                st.error(f"❌ Finner ikke kolonne: '{COL_KRAV}' i arket '{selected_sheet}'.")
+                st.write("**💡 Mulige løsninger:**")
+                st.write(f"1. Sjekk at kolonnenavn er riktig stavet i Excel-filen")
+                st.write(f"2. Hvis kolonnenavn er på en annen rad enn {header_row + 1}, juster **'Hvilken rad inneholder kolonnenavn?'** i sidebaren")
+                st.write(f"3. Kolonnen kan også hete 'Krav til slipp av minstevannføring (l/s)' eller lignende")
+                return
+            
+            # Prøv å konvertere dato-kolonnen med flere formater
+            try:
+                # Først prøv standard pandas parsing
+                df_raw[col_dato] = pd.to_datetime(df_raw[col_dato], errors='coerce', dayfirst=True)
+                
+                # Sjekk om vi har gyldige datoer
+                valid_dates = df_raw[col_dato].notna().sum()
+                total_rows = len(df_raw)
+                
+                if valid_dates == 0:
+                    st.error(f"❌ Kunne ikke tolke noen datoer i kolonnen '{col_dato}'.")
+                    st.write("**Eksempel på verdier i dato-kolonnen:**")
+                    st.write(df_raw[col_dato].head(10))
+                    st.write("Prøv å formatere dato-kolonnen som dato i Excel før opplasting.")
+                    return
+                elif valid_dates < total_rows * 0.5:
+                    st.warning(f"⚠️ Kun {valid_dates} av {total_rows} rader har gyldige datoer. Fortsetter med gyldige rader.")
+                    
+            except Exception as e:
+                st.error(f"❌ Feil ved parsing av datoer: {str(e)}")
+                st.write("**Eksempel på verdier i dato-kolonnen:**")
+                st.write(df_raw[col_dato].head(10))
+                return
+
+            # Rename kolonner til standard navn for resten av koden
+            rename_map = {}
+            if col_dato != COL_DATO:
+                rename_map[col_dato] = COL_DATO
+            if col_mvf != COL_MVF:
+                rename_map[col_mvf] = COL_MVF
+            if col_krav != COL_KRAV:
+                rename_map[col_krav] = COL_KRAV
+            if col_over and col_over != COL_OVER:
+                rename_map[col_over] = COL_OVER
+            if col_eff and col_eff != COL_EFF:
+                rename_map[col_eff] = COL_EFF
+            
+            if rename_map:
+                df_raw = df_raw.rename(columns=rename_map)
+
+            # Konverter numeriske kolonner
+            for col in [COL_MVF, COL_KRAV, COL_OVER, COL_EFF]:
+                if col in df_raw.columns:
+                    try:
+                        df_raw[col] = to_num(df_raw[col])
+                    except Exception as e:
+                        st.warning(f"⚠️ Kunne ikke konvertere '{col}' til tall: {str(e)}")
 
             segs, eff_used = build_segments(df_raw, eff_min_mw)
             
@@ -452,9 +637,12 @@ def main():
                 """)
 
         except Exception as e:
-            st.error(f"Feil ved lesing av fil: {e}")
+            st.error(f"❌ Uventet feil ved behandling av filen: {str(e)}")
+            st.write("**Feildetaljer:**")
+            import traceback
+            st.code(traceback.format_exc())
     else:
-        st.info("Vennligst last opp en fil for å starte.")
+        st.info("📁 Vennligst last opp en Excel-fil (.xlsx) for å starte.")
 
 if __name__ == "__main__":
     main()
