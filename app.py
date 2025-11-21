@@ -265,17 +265,6 @@ def build_figure(df_plot: pd.DataFrame, segs, gap_factor, selected_brudd_indices
         ), 1, 1, secondary_y=False)
 
     fig.update_xaxes(title_text="Dato", type="date")
-    fig.update_yaxes(title_text="Vannføring (l/s)", secondary_y=False)
-    fig.update_yaxes(title_text="Effekt produksjon (MW)", secondary_y=True)
-
-    fig.update_layout(
-        template="plotly_white", hovermode="x unified", dragmode="pan",
-        height=800,
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="left", x=0.0,
-                    bgcolor="rgba(255,255,255,0.75)"),
-        margin=dict(l=50, r=20, t=80, b=50),
-    )
-
     x_brudd_poly, y_brudd_poly = [], []
     for (x0, x1) in segs:
         if pd.isna(x0) or pd.isna(x1) or x1 <= x0:
@@ -313,6 +302,29 @@ def build_figure(df_plot: pd.DataFrame, segs, gap_factor, selected_brudd_indices
                     bordercolor="rgba(200,0,0,0.9)", borderwidth=1,
                     font=dict(color="rgba(200,0,0,0.95)", size=12)
                 )
+
+    fig.update_layout(
+        template="plotly_white",
+        hovermode="x unified",
+        dragmode="pan",
+        height=800,
+        hoverlabel=dict(
+            font_size=16,
+            font_family="Arial",
+            font_color="black",
+            bgcolor="white",
+            namelength=-1
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0.0,
+            bgcolor="rgba(255,255,255,0.8)"
+        ),
+        margin=dict(l=50, r=20, t=80, b=50),
+    )
 
     return fig
 
@@ -407,7 +419,8 @@ def get_stats_data(df_raw: pd.DataFrame, segs, eff_threshold_mw):
         "Manglende Min (%)": round(missing_pct, 1),
         "Antall brudd": len(segs),
         "Total bruddvarighet (h)": round(total_h, 2),
-        "Effektdata tilgjengelig": "Ja" if has_eff else "Nei"
+        "Effektdata tilgjengelig": "Ja" if has_eff else "Nei",
+        "Overløpsdata tilgjengelig": "Ja" if has_over else "Nei"
     }
 
     return summary, items
@@ -611,7 +624,7 @@ def main():
             summary, brudd_items = get_stats_data(df_raw, segs, eff_threshold_mw)
             
             # Vis sammendrag
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Antall brudd", summary["Antall brudd"])
             c2.metric("Total varighet (t)", summary["Total bruddvarighet (h)"])
             
@@ -621,7 +634,7 @@ def main():
             c3.markdown(f"**Datafangst**<br><span style='color:{datafangst_color}; font-size: 24px; font-weight: bold'>{datafangst_val}%</span>", unsafe_allow_html=True)
             
             c4.metric("Effektdata", summary["Effektdata tilgjengelig"])
-
+            
             # Container for plottet (øverst)
             plot_container = st.container()
 
@@ -679,6 +692,20 @@ def main():
                 
                 **Tilleggsinformasjon:**
                 *   **"— Overløp supplerer manglende MVF"**: MVF-data mangler for noen tidspunkter i bruddperioden, men Overløp-data finnes og brukes i beregningen.
+
+                ---
+
+                **Forklaring av innstillinger:**
+
+                **Effekt-terskel (MW)**
+                *   Brukes for å filtrere bort små spiker i produksjonsdataene, perioder der kraftverket står stille eller har svært lav produksjon.
+                *   Hvis `Effekt < terskel`, antas det at kraftverket er ute av drift, og lav minstevannføring regnes da **ikke** som et brudd.
+                *   Standardverdi er 0.05 MW.
+
+                **Gap-faktor (for hull-deteksjon)**
+                *   Bestemmer hvor stort et tids-hopp i dataene må være for å regnes som et "datahull".
+                *   Faktoren ganges med den vanlige tidsavstanden mellom målinger (median).
+                *   Eksempel: Hvis dataene kommer hver time og faktor er 1.5, vil et opphold på over 1.5 timer markeres som et hull (gul vertikal linje).
                 """)
 
         except Exception as e:
