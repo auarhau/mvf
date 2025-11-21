@@ -1,3 +1,6 @@
+# Local development scripts
+mvf_utvikling3.py
+
 # Excel files
 *.xlsx
 *.xls
