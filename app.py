@@ -49,12 +49,18 @@ def find_column(df: pd.DataFrame, base_name: str) -> str:
     
     # Deretter prøv å finne kolonner som starter med base_name
     for col in df.columns:
+        # Skip non-string column names (e.g., floats, numbers)
+        if not isinstance(col, str):
+            continue
         if col.startswith(base_name):
             return col
     
     # For "Krav" - sjekk om kolonnen inneholder "krav" (case-insensitive)
     base_lower = base_name.lower()
     for col in df.columns:
+        # Skip non-string column names
+        if not isinstance(col, str):
+            continue
         col_lower = col.lower()
         # Sjekk om kolonnen inneholder nøkkelordet
         if base_lower.split()[0] in col_lower:  # F.eks. "Krav" i "Krav til slipp..."
@@ -64,7 +70,7 @@ def find_column(df: pd.DataFrame, base_name: str) -> str:
     return None
 
 # ---------- Bruddlogikk ----------
-def build_segments(df_raw: pd.DataFrame, eff_min_mw: float):
+def build_segments(df_raw: pd.DataFrame, eff_threshold_mw: float):
     required = [COL_DATO, COL_MVF, COL_KRAV]
     if not all(c in df_raw.columns for c in required):
         return [], False
@@ -93,9 +99,15 @@ def build_segments(df_raw: pd.DataFrame, eff_min_mw: float):
     base = (release < df[COL_KRAV]) & has_any_release_data
 
     if has_eff:
-        cond = base & (df[COL_EFF].fillna(0.0) > eff_min_mw)
+        # Brudd hvis:
+        # 1. Effekt er over terskel (verifisert brudd)
+        # 2. ELLER Effekt mangler (NaN) (uverifisert brudd)
+        # Hvis effekt er 0 (eller under terskel), er det IKKE brudd.
+        eff_mask = (df[COL_EFF] > eff_threshold_mw) | df[COL_EFF].isna()
+        cond = base & eff_mask
         eff_used = True
     else:
+        # Ingen effektdata i det hele tatt -> alt er brudd (uverifisert)
         cond = base
         eff_used = False
 
@@ -305,10 +317,10 @@ def build_figure(df_plot: pd.DataFrame, segs, gap_factor, selected_brudd_indices
     return fig
 
 # ---------- Statistikk ----------
-def get_stats_data(df_raw: pd.DataFrame, segs, eff_min_mw):
+def get_stats_data(df_raw: pd.DataFrame, segs, eff_threshold_mw):
     tot_obs = int(df_raw[COL_MVF].shape[0]) if COL_MVF in df_raw.columns else 0
-    missing_min = int(df_raw[COL_MVF].isna().sum()) if COL_MVF in df_raw.columns else 0
-    missing_pct = (100.0 * missing_min / tot_obs) if tot_obs > 0 else 0.0
+    missing_mvf = int(df_raw[COL_MVF].isna().sum()) if COL_MVF in df_raw.columns else 0
+    missing_pct = (100.0 * missing_mvf / tot_obs) if tot_obs > 0 else 0.0
     completeness_pct = 100.0 - missing_pct
     is_ok = (completeness_pct >= 97.0)
 
@@ -343,11 +355,27 @@ def get_stats_data(df_raw: pd.DataFrame, segs, eff_min_mw):
         mean_def = float(deficit.mean()) if not deficit.empty else 0.0
 
         if has_eff:
-            eff_ok_all = (seg[COL_EFF].fillna(0.0) > eff_min_mw).all()
-            if eff_ok_all:
-                reason = "Underskudd verifisert (Min+Overløp < Krav, Effekt > terskel)"
+            # Sjekk effekt-status i hele segmentet
+            eff_all_missing = seg[COL_EFF].isna().all()
+            eff_all_above = (seg[COL_EFF].fillna(0.0) > eff_threshold_mw).all()
+
+            if eff_all_above:
+                # Alle timer har effekt over terskel -> verifisert
+                reason = "Underskudd verifisert (MVF+Overløp < Krav, Effekt > terskel)"
+            elif eff_all_missing:
+                # Ingen effekt-data i hele segmentet -> ikke verifisert
+                reason = "Underskudd (ikke verifisert – effekt mangler)"
             else:
-                reason = "Underskudd (varierende produksjon i segmentet)"
+                # Blandet: noen timer over terskel, andre mangler/under
+                # Sjekk om vi har NOEN timer over terskel
+                has_some_above = (seg[COL_EFF].fillna(0.0) > eff_threshold_mw).any()
+                if has_some_above:
+                     reason = "Underskudd (varierende produksjon i segmentet)"
+                else:
+                     # Har effektdata, men alt er under terskel (eller NaN).
+                     # Siden vi nå teller dette som brudd, kaller vi det "ikke verifisert"
+                     # eller vi kan si "Underskudd (Effekt under terskel)"
+                     reason = "Underskudd (ikke verifisert – effekt under terskel/mangler)"
         else:
             reason = "Underskudd (ikke verifisert – effekt mangler)"
 
@@ -359,10 +387,10 @@ def get_stats_data(df_raw: pd.DataFrame, segs, eff_min_mw):
             has_both_missing = False
 
         if has_both_missing:
-            reason += " — Delvis udokumentert (Min/Overløp mangler)"
+            reason += " — Delvis udokumentert (MVF/Overløp mangler)"
         
         if seg[COL_MVF].isna().any() and (COL_OVER in seg.columns):
-            reason += " — Overløp supplerer manglende Min"
+            reason += " — Overløp supplerer manglende MVF"
 
         items.append({
             "#": idx,
@@ -395,7 +423,7 @@ def main():
         st.header("Innstillinger")
         uploaded_file = st.file_uploader("Last opp Excel-fil", type=["xlsx"])
         
-        eff_min_mw = st.number_input("Effekt-terskel (MW)", value=DEFAULT_EFF_MIN_MW, step=0.01, format="%.2f")
+        eff_threshold_mw = st.number_input("Effekt-terskel (MW)", value=DEFAULT_EFF_MIN_MW, step=0.01, format="%.2f")
         gap_factor = st.number_input("Gap-faktor (for hull-deteksjon)", value=DEFAULT_GAP_FACTOR, step=0.1)
         
         st.markdown("---")
@@ -577,10 +605,10 @@ def main():
                     except Exception as e:
                         st.warning(f"⚠️ Kunne ikke konvertere '{col}' til tall: {str(e)}")
 
-            segs, eff_used = build_segments(df_raw, eff_min_mw)
+            segs, eff_used = build_segments(df_raw, eff_threshold_mw)
             
             # Statistikk
-            summary, brudd_items = get_stats_data(df_raw, segs, eff_min_mw)
+            summary, brudd_items = get_stats_data(df_raw, segs, eff_threshold_mw)
             
             # Vis sammendrag
             c1, c2, c3, c4 = st.columns(4)
@@ -630,10 +658,27 @@ def main():
             with st.expander("Se definisjoner og logikk"):
                 st.markdown("""
                 **Varighet og datagrunnlag for brudd:**
-                *   Brudd identifiseres når `(mvf + Overløp) < Krav`, og – dersom produksjonsdata finnes – `Effekt > terskel`.
+                *   Brudd identifiseres når `(MVF + Overløp) < Krav`, og – dersom produksjonsdata finnes – `Effekt > terskel`.
                 *   Varigheten beregnes som `slutt‑tidspunkt minus start‑tidspunkt` for perioder der disse vilkårene er oppfylt.
-                *   Et tidssteg kan kun bidra til brudd dersom minst én av *mvf* eller *Overløp* er dokumentert.
-                *   Perioder der *både* Min og Overløp mangler, regnes som udokumentert og vises ikke som brudd.
+                *   Et tidssteg kan kun bidra til brudd dersom minst én av *MVF* eller *Overløp* er dokumentert.
+                *   Perioder der *både* MVF og Overløp mangler, regnes som udokumentert og vises som datahull i grafen.
+                
+                ---
+                
+                **Begrunnelser i bruddloggen:**
+                
+                **1. "Underskudd verifisert (MVF+Overløp < Krav, Effekt > terskel)"**
+                *   Dette er et bekreftet brudd der kraftverket produserte, men slapp for lite vann.
+                *   Alle tidspunkter i bruddperioden har effekt over terskelverdien (standard 0.05 MW).
+                *   Eksempel: Kraftverket produserte 0.5 MW hele perioden, men MVF var kun 300 l/s når kravet var 500 l/s.
+                
+                **2. "Underskudd (ikke verifisert – effekt mangler)"**
+                *   Det er et underskudd (MVF+Overløp < Krav), men effektdata mangler i filen.
+                *   Uten effektdata kan vi ikke bekrefte om kraftverket faktisk produserte.
+                *   Eksempel: MVF = 300 l/s, Krav = 500 l/s, men kolonnen "Effekt (MW)" mangler eller er tom.
+                
+                **Tilleggsinformasjon:**
+                *   **"— Overløp supplerer manglende MVF"**: MVF-data mangler for noen tidspunkter i bruddperioden, men Overløp-data finnes og brukes i beregningen.
                 """)
 
         except Exception as e:
