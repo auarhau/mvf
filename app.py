@@ -11,9 +11,12 @@ st.set_page_config(page_title="Minstevannføring Rapport", layout="wide")
 # Skjul standard Streamlit-elementer (Meny, Footer, Header)
 hide_streamlit_style = """
 <style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
+#MainMenu {visibility: hidden; display: none !important;}
+footer {visibility: hidden; display: none !important;}
+header {visibility: hidden; display: none !important;}
+div[data-testid="stToolbar"] {visibility: hidden; display: none !important;}
+div[data-testid="stDecoration"] {visibility: hidden; display: none !important;}
+div[data-testid="stStatusWidget"] {visibility: hidden; display: none !important;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
