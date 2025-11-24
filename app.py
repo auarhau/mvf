@@ -8,6 +8,16 @@ from datetime import datetime
 # === KONFIGURASJON ===
 st.set_page_config(page_title="Minstevannføring Rapport", layout="wide")
 
+# Skjul standard Streamlit-elementer (Meny, Footer, Header)
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # Standard kolonnenavn
 COL_DATO = "Dato"
 COL_MVF  = "Minstevannføring (l/s)"

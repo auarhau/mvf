@@ -1,5 +1,7 @@
 # Local development scripts
 mvf_utvikling3.py
+generate_*.py
+test_*.py
 
 # Excel files
 *.xlsx
