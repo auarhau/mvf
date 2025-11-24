@@ -1,2 +1,6 @@
 [general]
 creator = "msko"
+
+[global]
+# Disables the 'Created by...' footer
+disableWatchdog = true
