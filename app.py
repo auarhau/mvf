@@ -17,6 +17,8 @@ header {visibility: hidden; display: none !important;}
 div[data-testid="stToolbar"] {visibility: hidden; display: none !important;}
 div[data-testid="stDecoration"] {visibility: hidden; display: none !important;}
 div[data-testid="stStatusWidget"] {visibility: hidden; display: none !important;}
+[data-testid="stFooter"] {visibility: hidden; display: none !important;}
+[data-testid="stHeader"] {visibility: hidden; display: none !important;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
